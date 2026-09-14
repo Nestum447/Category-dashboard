@@ -1,6 +1,7 @@
 # Multi-lingual Sentiment & Emotion Dashboard
 # Ver en Streamlit Multi-lingual Sentiment & Emotion Dashboard
-https://sentiment-emotion-dashboard-dzkbnqsccmyjwmeswmcnhi.streamlit.app/
+
+https://category-dashboard-eihwcops9yz9thmfbnzgqj.streamlit.app/
 
 [![Open in HF Spaces](https://img.shields.io/badge/🤗%20HuggingFace-Live%20Demo-yellow)](https://huggingface.co/spaces/Reethika30/sentiment-emotion-dashboard) ![Python](https://img.shields.io/badge/Python-3.11+-blue) ![Transformers](https://img.shields.io/badge/HuggingFace-Transformers-orange) ![Streamlit](https://img.shields.io/badge/Streamlit-1.30+-red) ![License](https://img.shields.io/badge/License-MIT-green)
 
