@@ -1,4 +1,4 @@
-```python
+
 """
 Multi-lingual Sentiment & Emotion Analysis Dashboard
 =====================================================
@@ -1171,4 +1171,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-```
