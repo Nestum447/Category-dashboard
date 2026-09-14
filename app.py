@@ -4,8 +4,8 @@ Multi-lingual Sentiment & Emotion Analysis Dashboard
 Streamlit app powered by HuggingFace Transformers.
 
 Modes:
-  - Single text   : paste any text → sentiment + emotion + confidence
-  - Batch CSV     : upload CSV with a 'text' column → bulk analysis + charts
+  - Single text   : paste any text → sentiment + emotion + category + confidence
+  - Batch CSV     : upload CSV with a 'text' column → bulk analysis + category dashboards
   - Live compare  : run several texts side-by-side
 
 Models:
@@ -40,6 +40,18 @@ st.set_page_config(
 
 SENTIMENT_MODEL = "cardiffnlp/twitter-xlm-roberta-base-sentiment"
 EMOTION_MODEL = "j-hartmann/emotion-english-distilroberta-base"
+CATEGORY_MODEL = "MoritzLaurer/mDeBERTa-v3-base-mnli-xnli"
+
+# Categorías de negocio analizadas por el modelo de clasificación.
+CATEGORIES = [
+    "Costo o precio",
+    "Calidad",
+    "Entrega",
+    "Servicio y atención",
+    "Producto",
+    "Comunicación",
+    "Otros",
+]
 
 SENTIMENT_COLORS = {
     "positive": "#2ecc71",
@@ -78,10 +90,15 @@ def _normalise_label(label: str) -> str:
     return label.lower().strip()
 
 
-def analyse_one(text: str, sent_pipe, emo_pipe) -> Dict:
+def analyse_one(text: str, sent_pipe, emo_pipe, cat_pipe) -> Dict:
     """Run sentiment + emotion on a single string, return flat dict."""
     sent_raw = sent_pipe(text[:512])[0]
     emo_raw = emo_pipe(text[:512])[0]
+    cat_raw = cat_pipe(
+        text[:512],
+        candidate_labels=CATEGORIES,
+        multi_label=False,
+    )
 
     sent_top = max(sent_raw, key=lambda x: x["score"])
     emo_top = max(emo_raw, key=lambda x: x["score"])
@@ -97,16 +114,17 @@ def analyse_one(text: str, sent_pipe, emo_pipe) -> Dict:
     }
 
 
-def analyse_batch(texts: List[str], sent_pipe, emo_pipe) -> pd.DataFrame:
+def analyse_batch(texts: List[str], sent_pipe, emo_pipe, cat_pipe) -> pd.DataFrame:
     rows = []
     progress = st.progress(0.0, text="Analysing…")
     n = len(texts)
     for i, text in enumerate(texts):
         if not isinstance(text, str) or not text.strip():
             continue
-        row = analyse_one(text, sent_pipe, emo_pipe)
+        row = analyse_one(text, sent_pipe, emo_pipe, cat_pipe)
         row.pop("_sent_dist", None)
         row.pop("_emo_dist", None)
+        row.pop("_category_dist", None)
         rows.append(row)
         progress.progress((i + 1) / n, text=f"Analysing {i + 1}/{n}")
     progress.empty()
@@ -127,6 +145,8 @@ def render_sidebar() -> None:
         - Emotion: 7 classes (joy, anger, fear, sadness, surprise, disgust, neutral)
           *DistilRoBERTa fine-tuned on emotion datasets*
 
+        **Categories:** Costo o precio · Calidad · Entrega · Servicio y atención · Producto · Comunicación · Otros
+
         **Tech:** HuggingFace Transformers · Streamlit · Plotly
         """
     )
@@ -140,7 +160,7 @@ def render_sidebar() -> None:
 # ----------------------------------------------------------------------------- #
 # UI: tabs                                                                      #
 # ----------------------------------------------------------------------------- #
-def tab_single(sent_pipe, emo_pipe) -> None:
+def tab_single(sent_pipe, emo_pipe, cat_pipe) -> None:
     st.subheader("Single Text Analysis")
     sample = "I absolutely loved the new product launch — it exceeded all my expectations!"
     text = st.text_area("Enter text (any of: en, es, fr, de, it, pt, ar, hi)",
@@ -151,9 +171,9 @@ def tab_single(sent_pipe, emo_pipe) -> None:
             st.warning("Please enter some text.")
             return
         with st.spinner("Running models…"):
-            result = analyse_one(text, sent_pipe, emo_pipe)
+            result = analyse_one(text, sent_pipe, emo_pipe, cat_pipe)
 
-        col1, col2 = st.columns(2)
+        col1, col2, col3 = st.columns(3)
         with col1:
             st.metric("Sentiment", result["sentiment"].title(),
                       f"{result['sentiment_confidence']*100:.1f}% confidence")
@@ -178,8 +198,27 @@ def tab_single(sent_pipe, emo_pipe) -> None:
             fig.update_layout(showlegend=False, height=260)
             st.plotly_chart(fig, use_container_width=True)
 
+        with col3:
+            st.metric(
+                "Categoría",
+                result["category"],
+                f'{result["category_confidence"]*100:.1f}% confidence',
+            )
+            cat_df = pd.DataFrame(
+                [{"label": k, "score": v} for k, v in result["_category_dist"].items()]
+            ).sort_values("score", ascending=True)
+            fig = px.bar(
+                cat_df,
+                x="score",
+                y="label",
+                orientation="h",
+                title="Distribución por categoría",
+            )
+            fig.update_layout(showlegend=False, height=260)
+            st.plotly_chart(fig, use_container_width=True)
 
-def tab_batch(sent_pipe, emo_pipe) -> None:
+
+def tab_batch(sent_pipe, emo_pipe, cat_pipe) -> None:
     st.subheader("Batch CSV Analysis")
     st.caption("Upload a CSV with a column named **text** — get aggregate dashboards.")
 
@@ -214,7 +253,7 @@ def tab_batch(sent_pipe, emo_pipe) -> None:
     st.dataframe(df_in.head(10), use_container_width=True)
 
     if st.button("Run Batch Analysis", type="primary", key="batch_btn"):
-        df_out = analyse_batch(df_in["text"].tolist(), sent_pipe, emo_pipe)
+        df_out = analyse_batch(df_in["text"].tolist(), sent_pipe, emo_pipe, cat_pipe)
 
         if df_out.empty:
             st.warning("No valid text rows to analyse.")
@@ -223,12 +262,13 @@ def tab_batch(sent_pipe, emo_pipe) -> None:
         st.success(f"Analysed {len(df_out)} rows.")
 
         # KPI row
-        c1, c2, c3, c4 = st.columns(4)
+        c1, c2, c3, c4, c5 = st.columns(5)
         c1.metric("Total", len(df_out))
         c2.metric("Positive", int((df_out["sentiment"] == "positive").sum()))
         c3.metric("Negative", int((df_out["sentiment"] == "negative").sum()))
         c4.metric("Avg Confidence",
                   f"{df_out['sentiment_confidence'].mean()*100:.1f}%")
+        c5.metric("Categorías", df_out["category"].nunique())
 
         # Distribution charts
         cc1, cc2 = st.columns(2)
@@ -249,6 +289,16 @@ def tab_batch(sent_pipe, emo_pipe) -> None:
             fig.update_layout(showlegend=False)
             st.plotly_chart(fig, use_container_width=True)
 
+        cat_counts = df_out["category"].value_counts().reset_index()
+        cat_counts.columns = ["category", "count"]
+        fig = px.bar(
+            cat_counts,
+            x="category",
+            y="count",
+            title="Análisis por categoría",
+        )
+        st.plotly_chart(fig, use_container_width=True)
+
         # Confidence histogram
         fig = px.histogram(df_out, x="sentiment_confidence", nbins=20,
                            title="Sentiment confidence histogram",
@@ -260,6 +310,14 @@ def tab_batch(sent_pipe, emo_pipe) -> None:
         fig = px.imshow(cross, text_auto=True, aspect="auto",
                         title="Sentiment × Emotion co-occurrence",
                         color_continuous_scale="Blues")
+        st.plotly_chart(fig, use_container_width=True)
+
+        cat_sent = pd.crosstab(df_out["category"], df_out["sentiment"])
+        fig = px.bar(
+            cat_sent,
+            barmode="group",
+            title="Categoría × Sentiment",
+        )
         st.plotly_chart(fig, use_container_width=True)
 
         # Detailed table + CSV
@@ -276,7 +334,7 @@ def tab_batch(sent_pipe, emo_pipe) -> None:
         )
 
 
-def tab_compare(sent_pipe, emo_pipe) -> None:
+def tab_compare(sent_pipe, emo_pipe, cat_pipe) -> None:
     st.subheader("Side-by-Side Comparison")
     st.caption("Enter up to 5 short texts to compare sentiment & emotion side-by-side.")
 
@@ -296,12 +354,12 @@ def tab_compare(sent_pipe, emo_pipe) -> None:
                 inputs.append(txt)
 
     if st.button("Compare", type="primary", key="cmp_btn") and inputs:
-        df = analyse_batch(inputs, sent_pipe, emo_pipe)
+        df = analyse_batch(inputs, sent_pipe, emo_pipe, cat_pipe)
         st.dataframe(df, use_container_width=True)
 
         fig = px.bar(df, x=df.index, y="sentiment_confidence",
                      color="sentiment", color_discrete_map=SENTIMENT_COLORS,
-                     hover_data=["text", "emotion"],
+                     hover_data=["text", "emotion", "category"],
                      title="Sentiment confidence per input")
         st.plotly_chart(fig, use_container_width=True)
 
@@ -317,14 +375,15 @@ def main() -> None:
 
     sent_pipe = load_sentiment()
     emo_pipe = load_emotion()
+    cat_pipe = load_category()
 
     t1, t2, t3 = st.tabs(["📝 Single Text", "📊 Batch CSV", "⚖️ Compare"])
     with t1:
-        tab_single(sent_pipe, emo_pipe)
+        tab_single(sent_pipe, emo_pipe, cat_pipe)
     with t2:
-        tab_batch(sent_pipe, emo_pipe)
+        tab_batch(sent_pipe, emo_pipe, cat_pipe)
     with t3:
-        tab_compare(sent_pipe, emo_pipe)
+        tab_compare(sent_pipe, emo_pipe, cat_pipe)
 
 
 if __name__ == "__main__":
